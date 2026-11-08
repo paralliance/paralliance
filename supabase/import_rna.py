@@ -11,7 +11,8 @@ la source et la date. Chaque association y déclare elle-même son objet.
 3. Relecture une par une des fiches restantes : décision et raison dans rna_relecture.json. Seules les fiches
    relues et retenues sont importées.
 4. Fiche : nom, commune et code postal du siège, centre de la commune pour la carte, sports, handicaps et pratique
-   tirés de l'objet déclaré (à défaut, du code d'activité), extrait de l'objet. Site : seulement ceux de la liste
+   tirés de l'objet déclaré (à défaut, du code d'activité). Rubrique « Accès » laissée vide : le RNA ne dit rien
+   de l'accessibilité des lieux (voir 18_retrait_acces_rna.sql). Site : seulement ceux de la liste
    « sites » de rna_relecture.json, contrôlés le 8 novembre 2026 avec verifier_site() (réponse en https, pas de
    contenu suspect, page qui parle bien du club).
    Ni adresse, ni dirigeant, ni téléphone, ni mail : le RNA ne publie pas ces informations.
@@ -509,46 +510,6 @@ def nom_club(titre):
     return nom[:1].upper() + nom[1:]
 
 
-# Extrait de l'objet : la proposition qui parle du handicap, telle que l'association l'a écrite
-MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
-
-
-def plat(s):
-    """Comme norm(), mais chaque caractère reste à sa place (pour retrouver le passage dans le texte d'origine)."""
-    return "".join(b if len(b := sans_accents(c).lower()) == 1 else c for c in s).replace("’", "'")
-
-
-def extrait(objet):
-    o = " ".join(objet.split())
-    p = plat(o)
-    m = PERS.search(p) or FORT.search(p) or HANDI.search(p)
-    if not m:
-        return ""
-    debut = max([p.rfind(sep, 0, m.start()) + len(sep) for sep in (";", ". ", " - ", "•") if p.rfind(sep, 0, m.start()) >= 0] or [0])
-    fins = [x for x in (p.find(";", m.end()), p.find(". ", m.end()), p.find(" - ", m.end())) if x >= 0]
-    fin = min(fins) if fins else len(o)
-    if fin - debut > 240:                                  # proposition trop longue : on garde le passage autour du handicap
-        a = max(debut, m.start() - 110)
-        b = min(fin, a + 230)
-        a = debut if a == debut else o.find(" ", a) + 1
-        b = fin if b == fin else o.rfind(" ", a, b)
-        morceau = ("…" if a > debut else "") + o[a:b].strip(" ,;") + ("…" if b < fin else "")
-    else:
-        morceau = o[debut:fin]
-    morceau = morceau.strip(" -–•*,.;:\"").replace("«", "“").replace("»", "”")
-    morceau += ")" * (morceau.count("(") - morceau.count(")"))
-    if sum(c.isupper() for c in o) > 0.6 * sum(c.isalpha() for c in o):     # objet écrit en majuscules
-        morceau = re.sub(r"[a-zà-ÿ]+", lambda x: ACCENTS.get(x.group(0), x.group(0)), morceau.lower())
-    return morceau[:1].upper() + morceau[1:]
-
-
-def accessibilite(r, extraits=None):
-    a, mois = r["date_decla"][:4], int(r["date_decla"][5:7])
-    morceau = (extraits or {}).get(r["id"]) or extrait(r["objet"])           # extrait corrigé à la relecture (nom de personne retiré)
-    texte_ = f"Objet déclaré par l'association au Répertoire national des associations (dernière déclaration : {MOIS[mois - 1]} {a})"
-    return f"{texte_} : « {morceau} »." if morceau else texte_ + "."
-
-
 # Commune du siège : nom officiel (geo.api.gouv.fr) à partir du code commune, et son centre pour la carte
 ANCIENNES_COMMUNES = {"49149": "49261", "85307": "85001", "85060": "85194", "86146": "86115", "93059": "93066"}   # fusionnées depuis
 
@@ -653,7 +614,7 @@ def html_en_texte(page):
     return html.unescape(re.sub(r"<[^>]+>", " ", re.sub(r"<script.*?</script>|<style.*?</style>", "", page, flags=re.S | re.I)))
 
 
-def fiche(r, com, arr, sites, corrections=None, extraits=None):
+def fiche(r, com, arr, sites, corrections=None):
     l = lieu(r, com, arr)
     if not l:
         return None
@@ -661,7 +622,7 @@ def fiche(r, com, arr, sites, corrections=None, extraits=None):
     hand = handicaps(r)
     sport = (corrections or {}).get(r["id"]) or ", ".join(sports(r))       # sports corrigés à la relecture
     return {"sport": sport, "nom": nom_club(r["titre"]), "code_postal": cp, "ville": ville,
-            "handicaps": ", ".join(hand), "pratique": pratique(r, hand), "accessibilite": accessibilite(r, extraits),
+            "handicaps": ", ".join(hand), "pratique": pratique(r, hand),
             "site": sites.get(r["id"], ""), "latitude": str(lat), "longitude": str(lon), "source": SOURCE}
 
 
@@ -699,7 +660,7 @@ def main():
     chemin, dossier = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else None)
     relecture = json.load(open(os.path.join(ICI, "rna_relecture.json"), encoding="utf-8"))
     retenus, ecartes, sites = set(relecture["retenus"]), relecture["ecartes"], relecture.get("sites", {})
-    corrections, extraits = relecture.get("sports", {}), relecture.get("extraits", {})
+    corrections = relecture.get("sports", {})
     com, arr = charger_communes(dossier)
     deps, base = departements(), clubs_en_ligne()
     lignes, non_relus = lire_rna(chemin, retenus, retenus | set(ecartes))
@@ -708,7 +669,7 @@ def main():
     fiches = []
     for i in sorted(lignes, key=lambda k: (lignes[k]["adrs_codepostal"], k)):
         r = lignes[i]
-        f = fiche(r, com, arr, sites, corrections, extraits)
+        f = fiche(r, com, arr, sites, corrections)
         if not f or r["adrs_codeinsee"][:3] in COLLECTIVITES or dep_site(f["code_postal"]) not in deps:
             print(f"-- hors départements du site : {r['id']} {r['titre']}", file=sys.stderr)
             continue
