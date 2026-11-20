@@ -27,7 +27,7 @@ SITE = "https://paralliance.org"
 SUPABASE_URL = "https://aogcjrfrfdasxesntlpk.supabase.co"
 SUPABASE_KEY = "sb_publishable_ZNohzowK1cNBG_-qukzemQ_KAG9EX-Z"   # clé publique (lecture des clubs publiés seulement)
 COLONNES = ("id,sport,nom,adresse,code_postal,ville,handicaps,pratique,creneaux,accessibilite,telephone,email,site,"
-            "label,para_sportifs,encadrant_forme,verifie_le,essai,latitude,longitude")
+            "label,para_sportifs,encadrant_forme,verifie_le,essai,latitude,longitude,source")
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 PRATIQUES = {"handisport": "Handisport", "sport adapte": "Sport adapté", "les deux": "Handisport et sport adapté"}
@@ -110,7 +110,7 @@ def club(r, deps):
         "acces": texte(r, "accessibilite"), "tel": texte(r, "telephone"), "email": texte(r, "email"),
         "site": site if re.fullmatch(r"https?://[^\s\"'<>]+", site) else "",
         "label": texte(r, "label"), "essai": texte(r, "essai"),
-        "lat": r.get("latitude"), "lon": r.get("longitude"),
+        "lat": r.get("latitude"), "lon": r.get("longitude"), "source": texte(r, "source"),
     }
 
 
@@ -186,7 +186,10 @@ def page_club(c, chemin, deps, voisins):
     desc = f"{c['nom']} à {c['ville']}" + (f" ({dep})" if dep else "") + f" : {sports.lower()}"
     if hand:
         desc += f", accueil des personnes en situation de handicap {', '.join(hand)}"
-    desc += ". Créneaux, accessibilité et contact sur Paralliance."
+    # La description n'annonce que ce que la fiche contient vraiment
+    infos = [mot for mot, present in (("créneaux", c["creneaux"]), ("accessibilité", c["acces"]),
+                                      ("contact", c["tel"] or c["email"] or c["site"])) if present]
+    desc += f". {cap(liste_fr(infos))} sur Paralliance." if infos else ". Carte et itinéraire sur Paralliance."
 
     adresse = " ".join(x for x in (c["adresse"], c["cp"] if len(c["cp"]) == 5 else "", c["ville"]) if x)
     blocs = [f'<div class="carte"><h2>Sports proposés</h2><div class="tags">{"".join(f"<span class=tag>{e(cap(s))}</span>" for s in c["sports"])}</div></div>']
@@ -209,6 +212,8 @@ def page_club(c, chemin, deps, voisins):
         contact.append(f'Site : <a href="{e(c["site"])}" rel="nofollow noopener" target="_blank">{e(c["site"])}</a>')
     if contact:
         blocs.append('<div class="carte"><h2>Contact</h2><p>' + "<br>".join(contact) + "</p></div>")
+    if c["source"]:
+        blocs.append(f'<p class="lieu">Source : {e(c["source"])}</p>')
     blocs.append(f'<p class="lieu">Une info est fausse ? <a href="mailto:contact@paralliance.org?subject={e(quote("Correction : " + c["nom"]))}">Signaler une correction</a></p>')
     if voisins:
         blocs.append(f'<div class="carte"><h2>Autres clubs – {e(dep)}</h2><ul class="liste">'
@@ -294,7 +299,7 @@ def page_departement(code, liste, deps):
     villes = sorted({c["ville"] for c in liste if c["ville"]})
     titre = f"Clubs handisport et sport adapté – {nom} | Paralliance"
     desc = (f"{len(liste)} club{'s' if len(liste) > 1 else ''} qui accueillent les personnes en situation de handicap en {nom} : "
-            + ", ".join(sports[:6]) + (" et plus" if len(sports) > 6 else "") + ". Créneaux, accessibilité et contacts.")
+            + ", ".join(sports[:6]) + (" et plus" if len(sports) > 6 else "") + ". Liste, carte et fiche de chaque club.")
     corps = (f'<nav class="fil"><a href="/">Accueil</a> › <a href="/clubs/">Clubs</a> › {e(nom)}</nav>'
              f'<h1>Clubs handisport et sport adapté – {e(nom)}</h1>'
              f'<p class="lieu">{len(liste)} club{"s" if len(liste) > 1 else ""} · {e(", ".join(villes[:8]))}{" …" if len(villes) > 8 else ""}</p>'
