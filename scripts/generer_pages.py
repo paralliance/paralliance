@@ -127,7 +127,7 @@ nav.fil{font-size:.9rem;color:var(--muted);margin:.5rem 0 1rem}nav.fil a{color:v
 h1{font-size:1.7rem;line-height:1.25;margin:.2rem 0 .4rem}.lieu{color:var(--muted);margin:0 0 1rem}
 .carte{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:1.2rem 1.3rem;margin:0 0 1rem}
 .carte h2{font-size:1.05rem;margin:0 0 .5rem}.carte p,.carte ul{margin:0}.carte ul{padding-left:1.2rem}
-.tags{display:flex;flex-wrap:wrap;gap:.4rem}.tag{background:color-mix(in srgb,var(--accent) 12%,var(--panel));color:var(--text);border-radius:999px;padding:.2rem .7rem;font-size:.9rem}
+.tags{display:flex;flex-wrap:wrap;gap:.4rem}.tag{background:color-mix(in srgb,var(--accent) 12%,var(--panel));color:var(--text);border-radius:999px;padding:.2rem .7rem;font-size:.9rem;text-decoration:none}
 .btn{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;font-weight:700;padding:.7rem 1.2rem;border-radius:999px;margin:.3rem .4rem .3rem 0}
 .btn.sec{background:transparent;color:var(--accent);border:1.5px solid var(--accent)}
 ul.liste{list-style:none;padding:0;margin:0}ul.liste li{padding:.55rem 0;border-bottom:1px solid var(--line)}ul.liste li:last-child{border:0}
@@ -136,7 +136,7 @@ footer{color:var(--muted);font-size:.9rem;padding-top:1.5rem;padding-bottom:2rem
 """
 
 
-def page(titre, description, chemin, corps, jsonld=None):
+def page(titre, description, chemin, corps, jsonld=None, indexer=True):
     e = html.escape
     ld = "".join(f'<script type="application/ld+json">{json.dumps(j, ensure_ascii=False)}</script>' for j in (jsonld or []))
     return f"""<!DOCTYPE html>
@@ -146,7 +146,7 @@ def page(titre, description, chemin, corps, jsonld=None):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{e(titre)}</title>
 <meta name="description" content="{e(description)}">
-<link rel="canonical" href="{SITE}/{chemin}">
+<link rel="canonical" href="{SITE}/{chemin}">{"" if indexer else chr(10) + '<meta name="robots" content="noindex, follow">'}
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Paralliance">
 <meta property="og:title" content="{e(titre)}">
@@ -171,6 +171,13 @@ def page(titre, description, chemin, corps, jsonld=None):
 
 
 # ===== Pages =====
+def fiche_mince(c):
+    """Fiche sans aucune information pratique (ni site, ni téléphone, ni e-mail, ni créneaux, ni accès).
+    Elle reste sur le site et sur la carte, mais Google ne l'indexe pas et elle n'est pas dans le sitemap :
+    Google juge le site sur l'ensemble de ses pages, et ces fiches n'apportent que le nom et la commune."""
+    return not (c["site"] or c["tel"] or c["email"] or c["creneaux"] or c["acces"])
+
+
 def nom_dep(code, deps):
     return f"{deps[code][0]} ({code})" if code in deps else ""
 
@@ -246,7 +253,7 @@ def page_club(c, chemin, deps, voisins):
         {"@type": "ListItem", "position": 1, "name": "Accueil", "item": f"{SITE}/"},
         {"@type": "ListItem", "position": 2, "name": "Clubs", "item": f"{SITE}/clubs/"},
         {"@type": "ListItem", "position": 3, "name": c["nom"], "item": f"{SITE}/{chemin}"}]}
-    return page(titre, desc, chemin, corps, [org, fil_ld])
+    return page(titre, desc, chemin, corps, [org, fil_ld], indexer=not fiche_mince(c))
 
 
 def liste_fr(mots):
@@ -305,9 +312,47 @@ def page_departement(code, liste, deps):
              f'<p class="lieu">{len(liste)} club{"s" if len(liste) > 1 else ""} · {e(", ".join(villes[:8]))}{" …" if len(villes) > 8 else ""}</p>'
              f'<p>{e(presentation_dep(nom, liste, villes))}</p>'
              f'<p><a class="btn" href="/#clubs">Rechercher sur la carte</a></p>'
-             f'<div class="carte"><h2>Sports proposés</h2><div class="tags">{"".join(f"<span class=tag>{e(cap(s))}</span>" for s in sports)}</div></div>'
-             f'<div class="carte"><h2>Les clubs</h2><ul class="liste">{"".join(ligne_club(c) for c in liste)}</ul></div>')
+             + blocs_departement(liste))
     return page(titre, desc, f"departements/{deps_slug(code, deps)}.html", corps)
+
+
+def pluriel(n, mot):
+    return f"{n} {mot}{'s' if n > 1 else ''}"
+
+
+def blocs_departement(liste):
+    """Accueil (handisport, sport adapté, handicaps) puis les clubs rangés par sport principal (le premier de la fiche).
+    Tout est compté à partir des fiches : rien n'est ajouté."""
+    e = html.escape
+    blocs = []
+    pratiques = {}
+    handicaps = {}
+    for c in liste:
+        if c["pratique"]:
+            pratiques[c["pratique"]] = pratiques.get(c["pratique"], 0) + 1
+        for h in c["handicaps"]:
+            h = HANDICAPS.get(h, h)
+            handicaps[h] = handicaps.get(h, 0) + 1
+    lignes = []
+    if pratiques:
+        lignes.append(" · ".join(f"{e(p)} : {pluriel(n, 'club')}" for p, n in sorted(pratiques.items(), key=lambda x: (-x[1], x[0]))))
+    if handicaps:
+        lignes.append("Handicaps accueillis : " + ", ".join(f"{e(h)} ({pluriel(n, 'club')})" for h, n in sorted(handicaps.items(), key=lambda x: (-x[1], x[0]))))
+    if lignes:
+        blocs.append('<div class="carte"><h2>Accueil</h2><p>' + "<br>".join(lignes) + "</p></div>")
+
+    if len(liste) < 8:   # peu de clubs : une seule liste
+        return "".join(blocs) + f'<div class="carte"><h2>Les clubs</h2><ul class="liste">{"".join(ligne_club(c) for c in liste)}</ul></div>'
+    groupes = {}
+    for c in liste:
+        groupes.setdefault(c["sports"][0] if c["sports"] else "autres sports", []).append(c)
+    ordre = sorted(groupes, key=lambda s: (-len(groupes[s]), norm(s)))
+    blocs.append('<div class="carte"><h2>Sports proposés</h2><div class="tags">'
+                 + "".join(f'<a class="tag" href="#sport-{slug(s)}">{e(cap(s))} ({len(groupes[s])})</a>' for s in ordre) + "</div></div>")
+    for s in ordre:
+        blocs.append(f'<div class="carte" id="sport-{slug(s)}"><h2>{e(cap(s))} · {pluriel(len(groupes[s]), "club")}</h2>'
+                     f'<ul class="liste">{"".join(ligne_club(c) for c in groupes[s])}</ul></div>')
+    return "".join(blocs)
 
 
 def page_index(par_dep, deps, total):
@@ -384,7 +429,7 @@ def main(fichier=None):
         anciennes = json.load(open(fichier_dates, encoding="utf-8"))
     except (OSError, ValueError):
         anciennes = {}
-    urls = [("", "1.0"), ("clubs/", "0.8")] + [(f"departements/{deps_slug(k, deps)}.html", "0.7") for k in par_dep] + [(c["chemin"], "0.6") for c in clubs]
+    urls = [("", "1.0"), ("clubs/", "0.8")] + [(f"departements/{deps_slug(k, deps)}.html", "0.7") for k in par_dep] + [(c["chemin"], "0.6") for c in clubs if not fiche_mince(c)]
     dates = {}
     for u, _ in urls:
         source = os.path.join(RACINE, u or "index.html", "index.html" if u.endswith("/") else "")
